@@ -207,9 +207,11 @@ class GeminiGroundedClient(BaseAPIClient):
         if load_dotenv is not None:
             load_dotenv()
 
+        # Use proxy endpoint (api.linkapi.org) if available, otherwise Google direct
+        proxy_endpoint = os.getenv('GEMINI_API_ENDPOINT', 'https://api.linkapi.org/v1beta/models')
         super().__init__(
             api_key=api_key or os.getenv('GOOGLE_API_KEY'),
-            base_url='https://generativelanguage.googleapis.com/v1beta/models',
+            base_url=proxy_endpoint,
             timeout=timeout,
             max_retries=max_retries
         )

@@ -381,19 +381,17 @@ class CitationResearcher:
         # #endregion
 
         # Determine if we should use parallel queries
-        # Use parallel for academic/journal queries where both CrossRef and Semantic Scholar are in chain
-        use_parallel = (
-            'crossref' in api_chain
-            and 'semantic_scholar' in api_chain
-            and self.enable_crossref
-            and self.enable_semantic_scholar
-        )
+        # Use parallel when we have 2+ enabled APIs to query
+        parallel_apis = []
+        if 'crossref' in api_chain and self.enable_crossref:
+            parallel_apis.append('crossref')
+        if 'semantic_scholar' in api_chain and self.enable_semantic_scholar:
+            parallel_apis.append('semantic_scholar')
+        if self.enable_gemini_grounded:
+            parallel_apis.append('gemini_grounded')
+        use_parallel = len(parallel_apis) >= 2
 
         if use_parallel:
-            # Query ALL 3 APIs in parallel for maximum source diversity
-            parallel_apis = ['crossref', 'semantic_scholar']
-            if self.enable_gemini_grounded:
-                parallel_apis.append('gemini_grounded')
 
             # #region agent log
             import json

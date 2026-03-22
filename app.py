@@ -138,20 +138,24 @@ def _run_generation(job_id: str, params: dict):
 
             def stream_research_complete(self, *a, **kw): pass
 
-            def stream_chapter_complete(self, chapter_num=None, chapter_name=None, **kw):
-                # Read the chapter content and pause for review
+            def stream_chapter_complete(self, chapter_num=None, chapter_name=None, chapter_path=None, **kw):
+                # Read the specific chapter file
                 chapter_content = ''
-                if output_dir.exists():
+                if chapter_path and Path(chapter_path).exists():
+                    chapter_content = Path(chapter_path).read_text(encoding='utf-8')
+                elif output_dir.exists():
                     drafts = output_dir / 'drafts'
                     if drafts.exists():
-                        # Find the latest written draft file
                         for f in sorted(drafts.glob('*.md'), key=lambda p: p.stat().st_mtime, reverse=True):
                             chapter_content = f.read_text(encoding='utf-8')
                             break
+                # Use chapter number as section key for reliable file matching
+                section_key = f'{chapter_num:02d}_chapter' if chapter_num else (chapter_name or 'chapter')
                 with _jobs_lock:
                     _jobs[job_id]['status'] = 'chapter_review'
-                    _jobs[job_id]['review_chapter'] = chapter_name or f'Chapter {chapter_num}'
-                    _jobs[job_id]['review_content'] = chapter_content[:5000]
+                    _jobs[job_id]['review_chapter'] = section_key
+                    _jobs[job_id]['review_chapter_name'] = chapter_name or f'Chapter {chapter_num}'
+                    _jobs[job_id]['review_content'] = chapter_content[:8000]
                 log(f'📖 {chapter_name or "Chapter"} ready for review')
                 # Block until user approves
                 gate.clear()
@@ -434,7 +438,7 @@ def stream(job_id):
                 if cur_status == 'outline_review':
                     yield f'data: {json.dumps({"type": "outline_review", "outline": job.get("outline", ""), "chapters_count": job.get("chapters_count", 0)})}\n\n'
                 elif cur_status == 'chapter_review':
-                    yield f'data: {json.dumps({"type": "chapter_review", "chapter": job.get("review_chapter", ""), "content": job.get("review_content", "")})}\n\n'
+                    yield f'data: {json.dumps({"type": "chapter_review", "chapter": job.get("review_chapter", ""), "chapter_name": job.get("review_chapter_name", ""), "content": job.get("review_content", "")})}\n\n'
                 last_status = cur_status
 
             if cur_status in ('done', 'error'):
@@ -628,11 +632,13 @@ def list_sections(job_id):
 def get_section(job_id, section_name):
     """Read a specific section's content."""
     output_dir = Path('/tmp') / f'opendraft_{job_id}' / 'drafts'
-    # Find matching file
-    for f in output_dir.glob('*.md'):
-        if section_name in f.stem:
-            return jsonify({'content': f.read_text(encoding='utf-8'), 'path': str(f)})
-    return jsonify({'error': 'Section not found'}), 404
+    # Find matching files, prefer formatted versions
+    matches = [f for f in output_dir.glob('*.md') if section_name in f.stem]
+    if not matches:
+        return jsonify({'error': 'Section not found'}), 404
+    # Prefer formatted_outline over plain outline
+    best = next((f for f in matches if 'formatted' in f.stem), matches[0])
+    return jsonify({'content': best.read_text(encoding='utf-8'), 'path': str(best)})
 
 
 @app.route('/api/sections/<job_id>/<section_name>', methods=['PUT'])

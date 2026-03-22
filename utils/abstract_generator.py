@@ -28,8 +28,21 @@ def detect_draft_language(draft_content: str) -> str:
         draft_content: Full draft markdown content
 
     Returns:
-        Language code: 'english', 'german', etc.
+        Language code: 'chinese', 'english', 'german', etc.
     """
+    # Check for Chinese indicators
+    chinese_indicators = [
+        '## 摘要', '# 目录', '## 引言', '## 绪论', '## 结论',
+        '## 参考文献', '## 文献综述', '第一章', '第二章',
+    ]
+    if any(indicator in draft_content for indicator in chinese_indicators):
+        return 'chinese'
+
+    # Check for high CJK character density
+    cjk_count = sum(1 for c in draft_content[:3000] if '\u4e00' <= c <= '\u9fff')
+    if cjk_count > 100:
+        return 'chinese'
+
     # Check for German indicators
     german_indicators = [
         '## Zusammenfassung',
@@ -155,6 +168,9 @@ def replace_placeholder_with_abstract(draft_content: str, generated_abstract: st
     if language == 'german':
         placeholder_pattern = r'^\s*## Zusammenfassung\n+\s*\[Zusammenfassung wird.*?\]\n+\s*\\\\?newpage'
         replacement = f"## Zusammenfassung\n\n{generated_abstract}\n\n\\\\newpage"
+    elif language == 'chinese':
+        placeholder_pattern = r'^\s*## 摘要\n+\s*\[Abstract will be generated.*?\]\n*(?:---?\n*|\s*\\\\?newpage)?'
+        replacement = f"## 摘要\n\n{generated_abstract}\n\n\\\\newpage"
     else:
         # Match abstract placeholder with optional whitespace, brackets, and newpage
         placeholder_pattern = r'^\s*## Abstract\n+\s*\[Abstract will be generated.*?\]\n*(?:---?\n*|\s*\\\\?newpage)?'
@@ -167,16 +183,18 @@ def replace_placeholder_with_abstract(draft_content: str, generated_abstract: st
     if updated_content == draft_content:
         logger.warning("Placeholder pattern not found - trying alternative patterns")
 
+        # Determine the heading label
+        heading = "## 摘要" if language == 'chinese' else ("## Zusammenfassung" if language == 'german' else "## Abstract")
         # Try alternative patterns (account for optional leading whitespace from indented templates)
         alt_patterns = [
-            # Match with \newpage (escaped in markdown as \\newpage) - with optional whitespace
-            (r'^\s*## Abstract\n+\s*\[.*?\]\n+\s*\\\\newpage', f"## Abstract\n\n{generated_abstract}\n\n\\\\newpage"),
+            # Match any abstract heading variant with \newpage
+            (r'^\s*## (?:Abstract|摘要)\n+\s*\[.*?\]\n+\s*\\\\newpage', f"{heading}\n\n{generated_abstract}\n\n\\\\newpage"),
             (r'^\s*## Zusammenfassung\n+\s*\[.*?\]\n+\s*\\\\newpage', f"## Zusammenfassung\n\n{generated_abstract}\n\n\\\\newpage"),
-            # Match with literal \newpage - with optional whitespace
-            (r'^\s*## Abstract\n+\s*\[.*?\]\n+\s*\\newpage', f"## Abstract\n\n{generated_abstract}\n\n\\newpage"),
+            # Match with literal \newpage
+            (r'^\s*## (?:Abstract|摘要)\n+\s*\[.*?\]\n+\s*\\newpage', f"{heading}\n\n{generated_abstract}\n\n\\newpage"),
             (r'^\s*## Zusammenfassung\n+\s*\[.*?\]\n+\s*\\newpage', f"## Zusammenfassung\n\n{generated_abstract}\n\n\\newpage"),
-            # Match without newpage - with optional whitespace
-            (r'^\s*## Abstract\n+\s*\[.*?\]', f"## Abstract\n\n{generated_abstract}"),
+            # Match without newpage
+            (r'^\s*## (?:Abstract|摘要)\n+\s*\[.*?\]', f"{heading}\n\n{generated_abstract}"),
             (r'^\s*## Zusammenfassung\n+\s*\[.*?\]', f"## Zusammenfassung\n\n{generated_abstract}"),
         ]
 
@@ -240,6 +258,14 @@ def generate_abstract_for_draft(
         print(f"  • Language: {language}")
 
     # Prepare user input for Abstract Generator agent
+    lang_instruction = ""
+    if language == 'chinese':
+        lang_instruction = "- You MUST write the entire abstract in Chinese (中文). All paragraphs, keywords, and labels must be in Chinese."
+    elif language == 'german':
+        lang_instruction = "- You MUST write the entire abstract in German (Deutsch)."
+    else:
+        lang_instruction = "- Write the abstract in English."
+
     user_input = f"""Generate an academic abstract for this draft.
 
 **Language:** {language.title()}
@@ -252,6 +278,7 @@ def generate_abstract_for_draft(
 - Include 12-15 relevant keywords
 - Follow standard academic abstract structure
 - Output ONLY the abstract content (no meta-comments)
+{lang_instruction}
 """
 
     # Call Abstract Generator agent

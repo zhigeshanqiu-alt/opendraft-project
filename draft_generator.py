@@ -501,88 +501,107 @@ def get_language_name(language_code: str) -> str:
 
 def get_word_count_targets(academic_level: str) -> dict:
     """
-    Get word count targets for each section based on academic level.
-    
-    Args:
-        academic_level: 'bachelor', 'master', 'phd', or 'research_paper'
-    
-    Returns:
-        Dictionary with word count targets for each section, plus citation/time estimates
+    Get word count targets based on academic level.
+    Only provides total word count and metadata — chapter-level targets
+    are determined dynamically by the Architect agent in the outline.
     """
     targets = {
         'research_paper': {
             'total': '3,000-5,000',
-            'introduction': '600-800',
-            'literature_review': '800-1,200',
-            'methodology': '600-800',
-            'results': '800-1,200',
-            'discussion': '600-800',
-            'conclusion': '400-600',
-            'appendices': '0',  # Optional for short papers
-            'chapters': '3-4',
-            'min_citations': 8,  # Fewer citations for short papers
-            'deep_research_min_sources': 12,  # Lightweight research for fast turnaround
-            'estimated_time_minutes': '5-10',  # Faster generation
+            'chapters': '3-5',
+            'min_citations': 8,
+            'deep_research_min_sources': 12,
+            'estimated_time_minutes': '5-10',
         },
         'bachelor': {
             'total': '10,000-15,000',
-            'introduction': '1,500-2,000',
-            'literature_review': '3,000-4,000',
-            'methodology': '1,500-2,000',
-            'results': '2,500-3,500',
-            'discussion': '1,500-2,000',
-            'conclusion': '800-1,200',
-            'appendices': '500-1,000',
             'chapters': '5-7',
-            'min_citations': 12,  # Moderate citations for bachelor's
-            'deep_research_min_sources': 20,  # Balanced research depth
-            'estimated_time_minutes': '8-15',  # Moderate time
+            'min_citations': 12,
+            'deep_research_min_sources': 20,
+            'estimated_time_minutes': '8-15',
         },
         'master': {
             'total': '25,000-30,000',
-            'introduction': '2,500-3,000',
-            'literature_review': '6,000-7,000',
-            'methodology': '3,000-3,500',
-            'results': '6,000-7,000',
-            'discussion': '3,000-3,500',
-            'conclusion': '1,500-2,000',
-            'appendices': '2,000-3,000',
             'chapters': '7-10',
-            'min_citations': 20,  # Comprehensive citations for master's
-            'deep_research_min_sources': 30,  # Capped research for 5min budget
-            'estimated_time_minutes': '10-25',  # Standard time
+            'min_citations': 20,
+            'deep_research_min_sources': 30,
+            'estimated_time_minutes': '10-25',
         },
         'phd': {
             'total': '50,000-80,000',
-            'introduction': '4,000-5,000',
-            'literature_review': '12,000-15,000',
-            'methodology': '6,000-8,000',
-            'results': '12,000-15,000',
-            'discussion': '8,000-10,000',
-            'conclusion': '3,000-4,000',
-            'appendices': '5,000-8,000',
             'chapters': '10-15',
-            'min_citations': 30,  # Citations for PhD (capped for speed)
-            'deep_research_min_sources': 40,  # Capped deep research for 5min budget
-            'estimated_time_minutes': '20-40',  # Longer generation time
+            'min_citations': 30,
+            'deep_research_min_sources': 40,
+            'estimated_time_minutes': '20-40',
         },
     }
-    return targets.get(academic_level, targets['master'])  # Default to master's
+    return targets.get(academic_level, targets['master'])
+
+
+def parse_outline_chapters(outline: str) -> list:
+    """
+    Parse the outline into a list of chapters.
+
+    Looks for `##` level headings as chapter boundaries.
+    Each chapter dict contains:
+      - 'heading': the full heading text (e.g. "Chapter 1: Introduction (~800 words)")
+      - 'title': clean chapter name (e.g. "Introduction")
+      - 'word_target': extracted word count target string (e.g. "800") or None
+      - 'content': full outline content for this chapter (heading + subsections)
+      - 'index': chapter number (1-based)
+
+    Returns:
+        List of chapter dicts in outline order
+    """
+    lines = outline.split('\n')
+    chapters = []
+    current_chapter = None
+
+    for line in lines:
+        stripped = line.strip()
+        # Match ## level headings (chapter boundaries)
+        heading_match = re.match(r'^##\s+(.+)', stripped)
+        if heading_match and not stripped.startswith('###'):
+            # Save previous chapter
+            if current_chapter:
+                current_chapter['content'] = '\n'.join(current_chapter['_lines']).strip()
+                del current_chapter['_lines']
+                chapters.append(current_chapter)
+
+            heading_text = heading_match.group(1).strip()
+
+            # Extract word target from heading like "(~800 words)" or "(~800字)"
+            word_match = re.search(r'\(~?([\d,]+)(?:\s*[-~]\s*[\d,]+)?\s*(?:words|字)\)', heading_text, re.IGNORECASE)
+            word_target = word_match.group(1).replace(',', '') if word_match else None
+
+            # Extract clean title: remove "Chapter N:" prefix and word count suffix
+            title = re.sub(r'^(?:Chapter|第)\s*\d+\s*[:：]\s*', '', heading_text, flags=re.IGNORECASE)
+            title = re.sub(r'\s*\(~?[\d,]+(?:\s*[-~]\s*[\d,]+)?\s*(?:words|字)\)\s*$', '', title, flags=re.IGNORECASE)
+            title = title.strip()
+
+            current_chapter = {
+                'heading': heading_text,
+                'title': title,
+                'word_target': word_target,
+                'index': len(chapters) + 1,
+                '_lines': [line],
+            }
+        elif current_chapter:
+            current_chapter['_lines'].append(line)
+
+    # Don't forget the last chapter
+    if current_chapter:
+        current_chapter['content'] = '\n'.join(current_chapter['_lines']).strip()
+        del current_chapter['_lines']
+        chapters.append(current_chapter)
+
+    return chapters
 
 
 def extract_outline_section(outline: str, chapter_keywords: list) -> str:
     """
-    Extract a specific chapter's content from the full outline.
-
-    Searches for headings matching any of the keywords, then returns
-    all content until the next same-level or higher heading.
-
-    Args:
-        outline: Full outline text (from architect/formatter)
-        chapter_keywords: List of keywords to match (e.g. ['introduction', '引言', '绪论'])
-
-    Returns:
-        The extracted section text, or empty string if not found
+    Extract a specific chapter's content from the full outline by keyword matching.
+    Kept for backward compatibility.
     """
     lines = outline.split('\n')
     result_lines = []
@@ -591,25 +610,19 @@ def extract_outline_section(outline: str, chapter_keywords: list) -> str:
 
     for line in lines:
         stripped = line.strip()
-        # Check if this is a heading
         heading_match = re.match(r'^(#{1,6})\s+(.*)', stripped)
         if heading_match:
             level = len(heading_match.group(1))
             heading_text = heading_match.group(2).lower()
-
             if capturing:
-                # Stop if we hit a same-level or higher heading that doesn't match
                 if level <= capture_level:
                     break
-
-            # Check if heading matches any keyword
             if not capturing:
                 for kw in chapter_keywords:
                     if kw.lower() in heading_text:
                         capturing = True
                         capture_level = level
                         break
-
         if capturing:
             result_lines.append(line)
 
@@ -891,17 +904,34 @@ def generate_draft(
 
         rate_limit_delay()
 
-        # Scribe - Summarize research
+        # Scribe - Summarize top 8 papers (deep analysis)
+        # Only the top 8 most relevant papers are deeply read and summarized.
+        # All other citations remain in the database for {cite_XXX} references.
+        MAX_DEEP_READ = 8
+        all_citations = scout_result.get('citations', [])
+        top_papers_text = ""
+        for i, c in enumerate(all_citations[:MAX_DEEP_READ]):
+            authors_str = ', '.join(c.authors[:3]) if c.authors else 'Unknown'
+            top_papers_text += f"\n### Paper {i+1}: {c.title}\n"
+            top_papers_text += f"**Authors:** {authors_str}\n"
+            top_papers_text += f"**Year:** {c.year or 'N/A'}\n"
+            if getattr(c, 'abstract', None):
+                top_papers_text += f"**Abstract:** {c.abstract[:500]}\n"
+            if getattr(c, 'doi', None):
+                top_papers_text += f"**DOI:** {c.doi}\n"
+            top_papers_text += "\n"
+
         if tracker:
-            tracker.log_activity("📝 Summarizing research findings...", event_type="info", phase="research")
+            tracker.log_activity("📝 正在深入研究论文..." if language == 'zh' else "📝 Deep reading research papers...", event_type="info", phase="research")
         scribe_output = run_agent(
             model=model,
             name="Scribe - Summarize Papers",
             prompt_path="prompts/01_research/scribe.md",
-            user_input=f"Summarize these research findings:\n\n{smart_truncate(scout_output, max_chars=8000, preserve_json=True)}",
+            user_input=f"Summarize these {min(MAX_DEEP_READ, len(all_citations))} key research papers in depth:\n\n{top_papers_text}",
             save_to=folders['research'] / "combined_research.md",
             skip_validation=skip_validation,
-            verbose=verbose
+            verbose=verbose,
+            clean_thinking=False
         )
         if tracker:
             tracker.log_activity("✅ Research summaries complete", event_type="found", phase="research")
@@ -933,7 +963,8 @@ def generate_draft(
             user_input=f"Analyze research gaps:\n\n{smart_truncate(scribe_output, max_chars=8000)}",
             save_to=folders['research'] / "research_gaps.md",
             skip_validation=skip_validation,
-            verbose=verbose
+            verbose=verbose,
+            clean_thinking=False
         )
         if tracker:
             tracker.log_activity("✅ Research gaps identified", event_type="found", phase="research")
@@ -950,7 +981,7 @@ def generate_draft(
         if tracker:
             tracker.log_activity("📋 Designing thesis structure", event_type="milestone", phase="structure")
             tracker.update_phase("structure", progress_percent=25, details={"stage": "creating_outline"})
-            tracker.check_cancellation()  # Check before starting major phase
+            tracker.check_cancellation()
 
         # Get word count targets based on academic level
         word_targets = get_word_count_targets(academic_level)
@@ -958,21 +989,18 @@ def generate_draft(
         chapters_info = word_targets['chapters']
 
         if provided_outline:
-            # Use pre-approved outline from user, skip Architect + Formatter
+            # Use pre-approved outline from user
             if tracker:
                 tracker.log_activity("📋 Using approved outline", event_type="info", phase="structure")
-            formatter_output = provided_outline
-            # Save to file for consistency
+            outline_output = provided_outline
             (folders['drafts'] / "00_outline.md").write_text(provided_outline, encoding='utf-8')
-            (folders['drafts'] / "00_formatted_outline.md").write_text(provided_outline, encoding='utf-8')
             if tracker:
                 tracker.log_activity("✅ Outline created", event_type="found", phase="structure")
         else:
-            # Architect - Create outline
+            # Architect - Create adaptive outline (no fixed template)
             if tracker:
                 tracker.log_activity("🏗️ Creating thesis outline...", event_type="info", phase="structure")
 
-            # Determine document type label
             doc_type_labels = {
                 'research_paper': 'short research paper',
                 'bachelor': 'bachelor\'s thesis',
@@ -981,45 +1009,58 @@ def generate_draft(
             }
             doc_type = doc_type_labels.get(academic_level, 'master\'s thesis')
 
-            outline_context = f"Create draft outline for: {topic}"
-            if blurb:
-                outline_context += f"\n\nFocus/Context: {blurb}"
-            outline_context += f"\n\nResearch gaps:\n{signal_output[:2000]}\n\nLength: {total_words} words ({doc_type}, {chapters_info} chapters){language_instruction}"
+            outline_context = f"""Design the optimal paper structure for the following topic.
 
-            architect_output = run_agent(
+Topic: {topic}
+{f"Focus/Context: {blurb}" if blurb else ""}
+
+Research gaps identified:
+{signal_output[:3000]}
+
+Requirements:
+- Academic level: {doc_type}
+- Total word count: {total_words} words
+- Target chapters: {chapters_info} chapters
+- {language_instruction.strip() if language_instruction else "Language: English"}
+
+IMPORTANT: Do NOT use a fixed IMRaD template. Analyze the topic and design a structure that best fits THIS specific topic. Think about what structure top-cited papers on this exact topic would use."""
+
+            outline_output = run_agent(
                 model=model,
                 name="Architect - Design Structure",
                 prompt_path="prompts/02_structure/architect.md",
                 user_input=outline_context,
                 save_to=folders['drafts'] / "00_outline.md",
                 skip_validation=skip_validation,
-                verbose=verbose
+                verbose=verbose,
+                clean_thinking=False
             )
             if tracker:
                 tracker.log_activity("✅ Outline created", event_type="found", phase="structure")
 
-            rate_limit_delay()
+        # Parse outline into chapters for dynamic writing
+        outline_chapters = parse_outline_chapters(outline_output)
+        logger.info(f"Parsed {len(outline_chapters)} chapters from outline:")
+        for ch in outline_chapters:
+            logger.info(f"  Chapter {ch['index']}: {ch['title']} (target: {ch['word_target'] or 'unspecified'} words)")
 
-            # Formatter - Apply style
-            formatter_output = run_agent(
-                model=model,
-                name="Formatter - Apply Style",
-                prompt_path="prompts/02_structure/formatter.md",
-                user_input=f"Apply academic formatting:\n\n{architect_output[:2500]}\n\nStyle: APA 7th edition",
-                save_to=folders['drafts'] / "00_formatted_outline.md",
-                skip_validation=skip_validation,
-                verbose=verbose
-            )
+        if not outline_chapters:
+            logger.warning("Could not parse chapters from outline, will use outline as single chapter")
+            outline_chapters = [{
+                'heading': 'Paper Content',
+                'title': 'Paper Content',
+                'word_target': None,
+                'content': outline_output,
+                'index': 1,
+            }]
 
         # MILESTONE: Outline Complete - Stream to user for review
         if streamer:
-            # Count chapters from outline
-            chapters_count = formatter_output.count('## Chapter') + formatter_output.count('# Chapter')
             streamer.stream_outline_complete(
-                outline_path=folders['drafts'] / "00_formatted_outline.md",
-                chapters_count=chapters_count if chapters_count > 0 else 5  # Default to 5 if can't parse
+                outline_path=folders['drafts'] / "00_outline.md",
+                chapters_count=len(outline_chapters)
             )
-    
+
         # Update progress with outline milestone
         if tracker:
             tracker.update_phase("structure", progress_percent=30, details={"stage": "outline_complete", "milestone": "outline_complete"})
@@ -1130,10 +1171,10 @@ def generate_draft(
         rate_limit_delay()
 
         # ====================================================================
-        # PHASE 3: COMPOSE (Simplified - 3 sections instead of 6)
+        # PHASE 3: COMPOSE - Dynamic chapter writing based on outline
         # ====================================================================
         logger.info("="*80)
-        logger.info("PHASE 3: COMPOSE - Writing chapters")
+        logger.info("PHASE 3: COMPOSE - Writing chapters dynamically from outline")
         logger.info("="*80)
         log_memory_usage("Before PHASE 3")
 
@@ -1143,562 +1184,111 @@ def generate_draft(
         if tracker:
             tracker.log_activity("✍️ Starting paper writing...", event_type="milestone", phase="writing")
             tracker.update_phase("writing", progress_percent=35, chapters_count=0, details={"stage": "starting_composition"})
-            tracker.check_cancellation()  # Check before starting major phase
+            tracker.check_cancellation()
             tracker.send_heartbeat()
 
-        # Get word count targets for this academic level
-        word_targets = get_word_count_targets(academic_level)
+        # Dynamic chapter writing — iterate outline_chapters in order
+        total_chapters = len(outline_chapters)
+        chapter_outputs = {}  # {index: output_text}
+        chapter_files = {}    # {index: file_path}
 
-        # ===== CHAPTER 1: Introduction =====
-        try:
-            intro_target = word_targets['introduction']
-            logger.info("[CHAPTER 1/4] Starting Introduction")
-            logger.info(f"  Target: {intro_target} words")
-            logger.info(f"  Output: {folders['drafts'] / '01_introduction.md'}")
-            chapter_start = time.time()
-            log_memory_usage("Before Chapter 1")
+        # ===== DYNAMIC CHAPTER WRITING =====
+        compose_start = time.time()
+        for ch in outline_chapters:
+            ch_idx = ch['index']
+            ch_title = ch['title']
+            ch_word_target = ch['word_target'] or '1000'
+            ch_content = ch['content']  # outline section for this chapter
+            ch_file = folders['drafts'] / f"{ch_idx:02d}_chapter.md"
 
-            if tracker:
-                tracker.log_activity("✍️ Writing Introduction chapter...", event_type="writing", phase="writing")
+            try:
+                logger.info(f"[CHAPTER {ch_idx}/{total_chapters}] Starting: {ch_title}")
+                logger.info(f"  Target: ~{ch_word_target} words")
+                logger.info(f"  Output: {ch_file}")
+                chapter_start = time.time()
+                log_memory_usage(f"Before Chapter {ch_idx}")
 
-            # Extract introduction section from outline
-            intro_outline = extract_outline_section(formatter_output, ['introduction', '引言', '绪论', '导论', 'einleitung'])
-            if not intro_outline:
-                intro_outline = formatter_output[:2000]
+                if tracker:
+                    ch_label = f"✍️ Writing: {ch_title}..." if language != 'zh' else f"✍️ 正在撰写：{ch_title}..."
+                    tracker.log_activity(ch_label, event_type="writing", phase="writing")
 
-            intro_output = run_agent(
-                model=model,
-                name="Crafter - Introduction",
-                prompt_path="prompts/03_compose/crafter.md",
-                user_input=f"""Write the Introduction chapter according to the outline below.
+                # Status callback for refine progress
+                def _ch_status(status, _title=ch_title, _lang=language):
+                    if tracker:
+                        if status == "refining":
+                            label = f"🔄 Polishing: {_title}..." if _lang != 'zh' else f"🔄 正在润色：{_title}..."
+                            tracker.log_activity(label, event_type="refining", phase="writing")
+                        elif status == "refined":
+                            label = f"✨ Polished: {_title}" if _lang != 'zh' else f"✨ 润色完成：{_title}"
+                            tracker.log_activity(label, event_type="refined", phase="writing")
+
+                ch_output = run_agent(
+                    model=model,
+                    name=f"Crafter - {ch_title}",
+                    prompt_path="prompts/03_compose/crafter.md",
+                    user_input=f"""Write Chapter {ch_idx} of {total_chapters} for the following paper.
 
 Topic: {topic}
 
+**THIS IS CHAPTER {ch_idx}: {ch_title}**
+
 **OUTLINE FOR THIS CHAPTER (you MUST follow this structure exactly):**
-{intro_outline}
+{ch_content}
 
 {citation_summary}
 
 **REQUIREMENTS:**
-1. Write {intro_target} words minimum
-2. Follow the outline's heading structure and subsections exactly — do NOT invent your own structure
-3. Cover every point listed in the outline
-4. Tables: max 300 chars per cell, max 5 columns. Put details in prose after tables
-5. Use {{cite_XXX}} format for citations{language_instruction}""",
-                save_to=folders['drafts'] / "01_introduction.md",
-                skip_validation=skip_validation,
-                verbose=verbose
-            )
-            if tracker:
-                tracker.log_activity("✅ Introduction complete", event_type="complete", phase="writing")
-
-            chapter_time = time.time() - chapter_start
-            chapter_file = folders['drafts'] / "01_introduction.md"
-            chapter_size = chapter_file.stat().st_size if chapter_file.exists() else 0
-            logger.info(f"[CHAPTER 1/4] ✅ Complete in {chapter_time:.1f}s")
-            logger.info(f"  File size: {chapter_size:,} bytes ({chapter_size/1024:.1f} KB)")
-            log_memory_usage("After Chapter 1")
-
-        except Exception as e:
-            logger.error(f"[CHAPTER 1/4] ❌ FAILED: {e}")
-            logger.error(f"[TRACEBACK] {traceback.format_exc()}")
-            if tracker:
-                tracker.mark_failed(f"Chapter 1 failed: {e}")
-            raise
-    
-        # MILESTONE: Introduction Complete - Stream to user
-        if streamer:
-            streamer.stream_chapter_complete(
-                chapter_num=1,
-                chapter_name="Introduction",
-                chapter_path=folders['drafts'] / "01_introduction.md"
-            )
-    
-        # Update progress  
-        if tracker:
-            tracker.update_phase("writing", progress_percent=40, chapters_count=1, details={"stage": "introduction_complete", "milestone": "introduction_complete"})
-
-        rate_limit_delay()
-
-        # ===== CHAPTER 2: Main Body (SPLIT INTO 4 SECTIONS FOR QUALITY) =====
-        lit_review_target = word_targets['literature_review']
-        methodology_target = word_targets['methodology']
-        results_target = word_targets['results']
-        discussion_target = word_targets['discussion']
-        total_body_target = f"{lit_review_target} + {methodology_target} + {results_target} + {discussion_target}"
-        
-        logger.info("="*80)
-        logger.info("[CHAPTER 2/4] Starting Main Body - Split into 4 focused sections")
-        logger.info("  2.1 Literature Review → 2.2 Methodology → 2.3 Results → 2.4 Discussion")
-        logger.info(f"  Total target: {total_body_target} words across 4 sections")
-        logger.info("="*80)
-        main_body_start = time.time()
-        log_memory_usage("Before Chapter 2 (Main Body)")
-
-        # ===== Section 2.1: Literature Review =====
-        try:
-            logger.info("[SECTION 2.1/4] Starting Literature Review")
-            logger.info(f"  Target: {lit_review_target} words")
-            logger.info(f"  Output: {folders['drafts'] / '02_1_literature_review.md'}")
-            section_start = time.time()
-
-            if tracker:
-                tracker.log_activity("✍️ Writing Literature Review section...", event_type="writing", phase="writing")
-
-            # Extract literature review section from outline
-            lit_outline = extract_outline_section(formatter_output, ['literature review', '文献综述', '文献回顾', '研究综述', 'literaturüberblick'])
-            if not lit_outline:
-                lit_outline = formatter_output[:2000]
-
-            lit_review_output = run_agent(
-                model=model,
-                name="Crafter - Literature Review",
-                prompt_path="prompts/03_compose/crafter.md",
-                user_input=f"""Write the Literature Review chapter according to the outline below.
-
-Topic: {topic}
-
-**OUTLINE FOR THIS CHAPTER (you MUST follow this structure exactly):**
-{lit_outline}
-
-Research summaries and abstracts:
-{scribe_output[:3000]}
-
-{citation_summary}
-
-**REQUIREMENTS:**
-1. Write {lit_review_target} words minimum
-2. Follow the outline's heading structure and subsections exactly — do NOT invent your own structure
-3. Cover every point listed in the outline
-4. Use the research abstracts above to write evidence-based review with specific findings, NOT generic statements
-5. Tables: max 300 chars per cell, max 5 columns
+1. Write approximately {ch_word_target} words
+2. This is Chapter {ch_idx} — all section numbers must start with {ch_idx}. (e.g., {ch_idx}.1, {ch_idx}.2, {ch_idx}.1.1)
+3. Follow the outline's heading structure and subsections exactly — do NOT invent your own structure
+4. Cover every point listed in the outline
+5. Tables: max 300 chars per cell, max 5 columns. Put details in prose after tables
 6. Use {{cite_XXX}} format for citations{language_instruction}""",
-                save_to=folders['drafts'] / "02_1_literature_review.md",
-                skip_validation=skip_validation,
-                verbose=verbose
-            )
-
-            section_time = time.time() - section_start
-            section_file = folders['drafts'] / "02_1_literature_review.md"
-            section_size = section_file.stat().st_size if section_file.exists() else 0
-            logger.info(f"[SECTION 2.1/4] ✅ Complete in {section_time:.1f}s")
-            logger.info(f"  File size: {section_size:,} bytes (~{section_size/6:,.0f} words)")
-
-            if tracker:
-                tracker.log_activity("✅ Literature Review complete", event_type="complete", phase="writing")
-                tracker.update_phase("writing", progress_percent=45, chapters_count=2, details={"stage": "literature_review_complete"})
-
-        except Exception as e:
-            logger.error(f"[SECTION 2.1/4] ❌ FAILED: {e}")
-            logger.error(f"[TRACEBACK] {traceback.format_exc()}")
-            if tracker:
-                tracker.mark_failed(f"Section 2.1 (Literature Review) failed: {e}")
-            raise
-
-        rate_limit_delay()
-
-        # ===== Section 2.2: Methodology =====
-        try:
-            logger.info("[SECTION 2.2/4] Starting Methodology")
-            logger.info(f"  Target: {methodology_target} words")
-            logger.info(f"  Output: {folders['drafts'] / '02_2_methodology.md'}")
-            section_start = time.time()
-            
-            if tracker:
-                tracker.log_activity("✍️ Writing Methodology section...", event_type="writing", phase="writing")
-
-            # Extract methodology section from outline
-            method_outline = extract_outline_section(formatter_output, ['methodology', '研究方法', '方法论', '方法', 'methodik', 'methods'])
-            if not method_outline:
-                method_outline = formatter_output[:2000]
-
-            methodology_output = run_agent(
-                model=model,
-                name="Crafter - Methodology",
-                prompt_path="prompts/03_compose/crafter.md",
-                user_input=f"""Write the Methodology chapter according to the outline below.
-
-Topic: {topic}
-
-**OUTLINE FOR THIS CHAPTER (you MUST follow this structure exactly):**
-{method_outline}
-
-Literature Review context (what was identified):
-{lit_review_output[-2000:]}
-
-Research gaps from Signal phase:
-{signal_output[:1500]}
-
-{citation_summary}
-
-**REQUIREMENTS:**
-1. Write {methodology_target} words minimum
-2. Follow the outline's heading structure and subsections exactly — do NOT invent your own structure
-3. Cover every point listed in the outline
-4. Build on Literature Review: reference gaps identified in the previous chapter
-5. Describe methodologies from cited literature — do NOT claim "we conducted" unless outline specifies original research
-6. Tables: max 300 chars per cell, max 5 columns
-7. Use {{cite_XXX}} format for citations{language_instruction}""",
-                save_to=folders['drafts'] / "02_2_methodology.md",
-                skip_validation=skip_validation,
-                verbose=verbose
-            )
-
-            section_time = time.time() - section_start
-            section_file = folders['drafts'] / "02_2_methodology.md"
-            section_size = section_file.stat().st_size if section_file.exists() else 0
-            logger.info(f"[SECTION 2.2/4] ✅ Complete in {section_time:.1f}s")
-            logger.info(f"  File size: {section_size:,} bytes (~{section_size/6:,.0f} words)")
-
-            if tracker:
-                tracker.log_activity("✅ Methodology complete", event_type="complete", phase="writing")
-                tracker.update_phase("writing", progress_percent=50, chapters_count=2, details={"stage": "methodology_complete"})
-
-        except Exception as e:
-            logger.error(f"[SECTION 2.2/4] ❌ FAILED: {e}")
-            logger.error(f"[TRACEBACK] {traceback.format_exc()}")
-            if tracker:
-                tracker.mark_failed(f"Section 2.2 (Methodology) failed: {e}")
-            raise
-
-        rate_limit_delay()
-
-        # ===== Section 2.3: Analysis and Results =====
-        try:
-            logger.info("[SECTION 2.3/4] Starting Analysis and Results")
-            logger.info(f"  Target: {results_target} words")
-            logger.info(f"  Output: {folders['drafts'] / '02_3_analysis_results.md'}")
-            section_start = time.time()
-            
-            if tracker:
-                tracker.log_activity("✍️ Writing Analysis & Results section...", event_type="writing", phase="writing")
-
-            # Extract results section from outline
-            results_outline = extract_outline_section(formatter_output, ['result', 'analysis', '结果', '分析', '研究结果', 'ergebnisse'])
-            if not results_outline:
-                results_outline = formatter_output[:2000]
-
-            results_output = run_agent(
-                model=model,
-                name="Crafter - Analysis and Results",
-                prompt_path="prompts/03_compose/crafter.md",
-                user_input=f"""Write the Analysis and Results chapter according to the outline below.
-
-Topic: {topic}
-
-**OUTLINE FOR THIS CHAPTER (you MUST follow this structure exactly):**
-{results_outline}
-
-Methodology context (from previous chapter):
-{methodology_output[-1500:]}
-
-Research data and abstracts:
-{scribe_output[1000:2500]}
-
-{citation_summary}
-
-**REQUIREMENTS:**
-1. Write {results_target} words minimum
-2. Follow the outline's heading structure and subsections exactly — do NOT invent your own structure
-3. Cover every point listed in the outline
-4. Present findings from cited sources — use "Research by {{cite_XXX}} found..." style
-5. Do NOT fabricate data or claim original experiments unless outline specifies original research
-6. Tables: max 300 chars per cell, max 5 columns
-7. Use {{cite_XXX}} format for citations{language_instruction}""",
-                save_to=folders['drafts'] / "02_3_analysis_results.md",
-                skip_validation=skip_validation,
-                verbose=verbose
-            )
-
-            section_time = time.time() - section_start
-            section_file = folders['drafts'] / "02_3_analysis_results.md"
-            section_size = section_file.stat().st_size if section_file.exists() else 0
-            logger.info(f"[SECTION 2.3/4] ✅ Complete in {section_time:.1f}s")
-            logger.info(f"  File size: {section_size:,} bytes (~{section_size/6:,.0f} words)")
-
-            if tracker:
-                tracker.log_activity("✅ Analysis & Results complete", event_type="complete", phase="writing")
-                tracker.update_phase("writing", progress_percent=55, chapters_count=2, details={"stage": "results_complete"})
-
-        except Exception as e:
-            logger.error(f"[SECTION 2.3/4] ❌ FAILED: {e}")
-            logger.error(f"[TRACEBACK] {traceback.format_exc()}")
-            if tracker:
-                tracker.mark_failed(f"Section 2.3 (Analysis and Results) failed: {e}")
-            raise
-
-        rate_limit_delay()
-
-        # ===== Section 2.4: Discussion =====
-        try:
-            logger.info("[SECTION 2.4/4] Starting Discussion")
-            logger.info(f"  Target: {discussion_target} words")
-            logger.info(f"  Output: {folders['drafts'] / '02_4_discussion.md'}")
-            section_start = time.time()
-            
-            if tracker:
-                tracker.log_activity("✍️ Writing Discussion section...", event_type="writing", phase="writing")
-
-            # Extract discussion section from outline
-            disc_outline = extract_outline_section(formatter_output, ['discussion', '讨论', '分析讨论', 'diskussion'])
-            if not disc_outline:
-                disc_outline = formatter_output[:2000]
-
-            discussion_output = run_agent(
-                model=model,
-                name="Crafter - Discussion",
-                prompt_path="prompts/03_compose/crafter.md",
-                user_input=f"""Write the Discussion chapter according to the outline below.
-
-Topic: {topic}
-
-**OUTLINE FOR THIS CHAPTER (you MUST follow this structure exactly):**
-{disc_outline}
-
-Results context (from previous chapter):
-{results_output[-2000:]}
-
-Literature Review context:
-{lit_review_output[:1500]}
-
-Research gaps addressed:
-{signal_output[:1000]}
-
-{citation_summary}
-
-**REQUIREMENTS:**
-1. Write {discussion_target} words minimum
-2. Follow the outline's heading structure and subsections exactly — do NOT invent your own structure
-3. Cover every point listed in the outline
-4. Connect back to previous chapters: reference literature review findings and results
-5. Discuss findings from cited sources — do NOT claim original research unless outline specifies it
-6. Tables: max 300 chars per cell, max 5 columns
-7. Use {{cite_XXX}} format for citations{language_instruction}""",
-                save_to=folders['drafts'] / "02_4_discussion.md",
-                skip_validation=skip_validation,
-                verbose=verbose
-            )
-
-            section_time = time.time() - section_start
-            section_file = folders['drafts'] / "02_4_discussion.md"
-            section_size = section_file.stat().st_size if section_file.exists() else 0
-            logger.info(f"[SECTION 2.4/4] ✅ Complete in {section_time:.1f}s")
-            logger.info(f"  File size: {section_size:,} bytes (~{section_size/6:,.0f} words)")
-
-            if tracker:
-                tracker.log_activity("✅ Discussion complete", event_type="complete", phase="writing")
-                tracker.update_phase("writing", progress_percent=60, chapters_count=2, details={"stage": "discussion_complete"})
-
-            # Stream section completion to Supabase (no email - odd chapter)
-        except Exception as e:
-            logger.error(f"[SECTION 2.4/4] ❌ FAILED: {e}")
-            logger.error(f"[TRACEBACK] {traceback.format_exc()}")
-            if tracker:
-                tracker.mark_failed(f"Section 2.4 (Discussion) failed: {e}")
-            raise
-
-        # ===== Merge all sections into 02_main_body.md =====
-        logger.info("="*80)
-        logger.info("[CHAPTER 2/4] Merging 4 sections into Main Body")
-        logger.info("="*80)
-        
-        if tracker:
-            tracker.log_activity("🔗 Merging sections into Main Body...", event_type="info", phase="writing")
-
-        try:
-            merged_content = []
-
-            # Read and merge all 4 sections
-            for section_file in [
-                folders['drafts'] / "02_1_literature_review.md",
-                folders['drafts'] / "02_2_methodology.md",
-                folders['drafts'] / "02_3_analysis_results.md",
-                folders['drafts'] / "02_4_discussion.md"
-            ]:
-                if section_file.exists():
-                    content = section_file.read_text(encoding='utf-8')
-                    merged_content.append(content)
-                    merged_content.append("\n\n")  # Add spacing between sections
-
-            # Write merged file
-            merged_body = "".join(merged_content)
-            main_body_file = folders['drafts'] / "02_main_body.md"
-            main_body_file.write_text(merged_body, encoding='utf-8')
-
-            # Set body_output for downstream use
-            body_output = merged_body
-
-            # Log final stats
-            main_body_time = time.time() - main_body_start
-            main_body_size = main_body_file.stat().st_size
-            logger.info(f"[CHAPTER 2/4] ✅ Complete in {main_body_time:.1f}s ({main_body_time/60:.1f} min)")
-            logger.info(f"  Merged file: {main_body_file}")
-            logger.info(f"  File size: {main_body_size:,} bytes ({main_body_size/1024/1024:.1f} MB)")
-            logger.info(f"  Estimated words: ~{main_body_size/6:,.0f}")
-            log_memory_usage("After Chapter 2 (Main Body) - All 4 sections merged")
-
-            # MILESTONE: Main Body Complete - Stream merged chapter to Supabase
-            if streamer:
-                streamer.stream_chapter_complete(
-                    chapter_num=2,
-                    chapter_name="Main Body (Complete)",
-                    chapter_path=folders['drafts'] / "02_main_body.md"
+                    save_to=ch_file,
+                    skip_validation=skip_validation,
+                    verbose=verbose,
+                    on_status=_ch_status
                 )
 
-        except Exception as e:
-            logger.error(f"[CHAPTER 2/4] ❌ Merge FAILED: {e}")
-            logger.error(f"[TRACEBACK] {traceback.format_exc()}")
-            if tracker:
-                tracker.mark_failed(f"Chapter 2 merge failed: {e}")
-            raise
+                chapter_outputs[ch_idx] = ch_output
+                chapter_files[ch_idx] = ch_file
 
-        rate_limit_delay()
+                chapter_time = time.time() - chapter_start
+                chapter_size = ch_file.stat().st_size if ch_file.exists() else 0
+                logger.info(f"[CHAPTER {ch_idx}/{total_chapters}] ✅ Complete in {chapter_time:.1f}s")
+                logger.info(f"  File size: {chapter_size:,} bytes (~{chapter_size//6:,} words)")
 
-        # ===== CHAPTER 3: Conclusion =====
-        try:
-            conclusion_target = word_targets['conclusion']
-            logger.info("[CHAPTER 3/4] Starting Conclusion")
-            logger.info(f"  Target: {conclusion_target} words")
-            logger.info(f"  Output: {folders['drafts'] / '03_conclusion.md'}")
-            chapter_start = time.time()
-            log_memory_usage("Before Chapter 3")
-            
-            if tracker:
-                tracker.log_activity("✍️ Writing Conclusion chapter...", event_type="writing", phase="writing")
+                if tracker:
+                    done_label = f"✅ {ch_title} complete" if language != 'zh' else f"✅ {ch_title}完成"
+                    tracker.log_activity(done_label, event_type="complete", phase="writing")
+                    progress = 35 + int(55 * ch_idx / total_chapters)
+                    tracker.update_phase("writing", progress_percent=min(progress, 88), chapters_count=ch_idx, details={"stage": f"chapter_{ch_idx}_complete"})
 
-            # Extract conclusion section from outline
-            conc_outline = extract_outline_section(formatter_output, ['conclusion', '结论', '总结', '结语', 'fazit', 'schlussfolgerung'])
-            if not conc_outline:
-                conc_outline = formatter_output[:2000]
+                # Stream chapter to frontend
+                if streamer:
+                    streamer.stream_chapter_complete(
+                        chapter_num=ch_idx,
+                        chapter_name=ch_title,
+                        chapter_path=ch_file
+                    )
 
-            conclusion_output = run_agent(
-                model=model,
-                name="Crafter - Conclusion",
-                prompt_path="prompts/03_compose/crafter.md",
-                user_input=f"""Write the Conclusion chapter according to the outline below.
+            except Exception as e:
+                logger.error(f"[CHAPTER {ch_idx}/{total_chapters}] ❌ FAILED: {e}")
+                logger.error(f"[TRACEBACK] {traceback.format_exc()}")
+                if tracker:
+                    tracker.mark_failed(f"Chapter {ch_idx} ({ch_title}) failed: {e}")
+                raise
 
-Topic: {topic}
+            rate_limit_delay()
 
-**OUTLINE FOR THIS CHAPTER (you MUST follow this structure exactly):**
-{conc_outline}
+        compose_time = time.time() - compose_start
+        logger.info(f"PHASE 3 COMPLETE - {total_chapters} chapters written in {compose_time:.1f}s ({compose_time/60:.1f} min)")
 
-Main findings from previous chapters:
-{body_output[:2000]}
-
-{citation_summary}
-
-**REQUIREMENTS:**
-1. Write {conclusion_target} words minimum
-2. Follow the outline's heading structure and subsections exactly — do NOT invent your own structure
-3. Cover every point listed in the outline
-4. Tables: max 300 chars per cell, max 5 columns
-5. Use {{cite_XXX}} format for citations{language_instruction}""",
-                save_to=folders['drafts'] / "03_conclusion.md",
-                skip_validation=skip_validation,
-                verbose=verbose
-            )
-
-            chapter_time = time.time() - chapter_start
-            chapter_file = folders['drafts'] / "03_conclusion.md"
-            chapter_size = chapter_file.stat().st_size if chapter_file.exists() else 0
-            logger.info(f"[CHAPTER 3/4] ✅ Complete in {chapter_time:.1f}s")
-            logger.info(f"  File size: {chapter_size:,} bytes ({chapter_size/1024:.1f} KB)")
-            log_memory_usage("After Chapter 3")
-
-        except Exception as e:
-            logger.error(f"[CHAPTER 3/4] ❌ FAILED: {e}")
-            logger.error(f"[TRACEBACK] {traceback.format_exc()}")
-            if tracker:
-                tracker.mark_failed(f"Chapter 3 (Conclusion) failed: {e}")
-            raise
-
-        # MILESTONE: Conclusion Complete - Stream to user
-        if streamer:
-            streamer.stream_chapter_complete(
-                chapter_num=3,
-                chapter_name="Conclusion",
-                chapter_path=folders['drafts'] / "03_conclusion.md"
-            )
-
-        # Update progress
-        if tracker:
-            tracker.log_activity("✅ Conclusion complete", event_type="complete", phase="writing")
-            tracker.update_phase("writing", progress_percent=70, chapters_count=3, details={"stage": "conclusion_complete", "milestone": "conclusion_complete"})
-
-        rate_limit_delay()
-
-        # ===== CHAPTER 4: Appendices =====
-        try:
-            appendices_target = word_targets['appendices']
-            logger.info("[CHAPTER 4/4] Starting Appendices")
-            logger.info(f"  Target: {appendices_target} words")
-            logger.info(f"  Output: {folders['drafts'] / '04_appendices.md'}")
-            chapter_start = time.time()
-            log_memory_usage("Before Chapter 4")
-
-            # Skip appendices for research papers if target is 0
-            if appendices_target == '0':
-                logger.info("  Skipping appendices for research paper format")
-                appendix_output = ""
-            else:
-                appendix_output = run_agent(
-                model=model,
-                name="Crafter - Appendices",
-                prompt_path="prompts/03_compose/crafter.md",
-                user_input=f"""Write the Appendices according to the outline below.
-
-Topic: {topic}
-
-**OUTLINE FOR APPENDICES (follow outline structure if appendices are specified):**
-{extract_outline_section(formatter_output, ['appendix', 'appendices', '附录', '附件', 'anhang']) or 'Generate 3-4 relevant appendices based on the paper content.'}
-
-Draft content summary:
-- Introduction: {intro_output[:1500]}
-- Main findings: {body_output[:2000]}
-- Conclusion: {conclusion_output[:1000]}
-
-{citation_summary}
-
-**REQUIREMENTS:**
-1. Write {appendices_target} words total across all appendices
-2. Follow the outline's appendix structure if specified, otherwise create relevant appendices
-3. Tables: max 300 chars per cell, max 5 columns
-4. Use {{cite_XXX}} format for citations
-5. Each appendix should be standalone and informative{language_instruction}""",
-                save_to=folders['drafts'] / "04_appendices.md",
-                skip_validation=skip_validation,
-                verbose=verbose
-            )
-
-            chapter_time = time.time() - chapter_start
-            chapter_file = folders['drafts'] / "04_appendices.md"
-            chapter_size = chapter_file.stat().st_size if chapter_file.exists() else 0
-            logger.info(f"[CHAPTER 4/4] ✅ Complete in {chapter_time:.1f}s")
-            logger.info(f"  File size: {chapter_size:,} bytes ({chapter_size/1024:.1f} KB)")
-            log_memory_usage("After Chapter 4")
-
-            # Update progress
-            if tracker:
-                tracker.update_phase("writing", progress_percent=75, chapters_count=4, details={"stage": "appendices_complete"})
-
-            # MILESTONE: Appendices Complete - Stream to Supabase (only if appendices were generated)
-            if streamer and appendices_target != '0':
-                streamer.stream_chapter_complete(
-                    chapter_num=4,
-                    chapter_name="Appendices",
-                    chapter_path=folders['drafts'] / "04_appendices.md"
-                )
-
-            logger.info("="*80)
-            logger.info("PHASE 3 COMPLETE - All chapters written successfully!")
-            logger.info("="*80)
-
-        except Exception as e:
-            logger.error(f"[CHAPTER 4/4] ❌ FAILED: {e}")
-            logger.error(f"[TRACEBACK] {traceback.format_exc()}")
-            if tracker:
-                tracker.mark_failed(f"Chapter 4 (Appendices) failed: {e}")
-            raise
+        # Build body_output from all chapters for downstream use
+        body_output = ""
+        for ch_idx in sorted(chapter_outputs.keys()):
+            body_output += chapter_outputs[ch_idx] + "\n\n"
+        body_output = body_output.strip()
 
         rate_limit_delay()
 
@@ -1713,87 +1303,14 @@ Draft content summary:
         if verbose:
             print("\n🔍 PHASE 3.5: QUALITY ASSURANCE")
 
-        # Prepare all chapter content for QA review
-        all_chapters_content = f"""# Complete Draft for QA Review
-
-## Chapter 1: Introduction
-{intro_output}
-
-## Chapter 2: Main Body
-
-### Section 2.1: Literature Review
-{folders['drafts'] / '02_1_literature_review.md' if (folders['drafts'] / '02_1_literature_review.md').exists() else '[Section file not found]'}
-
-### Section 2.2: Methodology
-{folders['drafts'] / '02_2_methodology.md' if (folders['drafts'] / '02_2_methodology.md').exists() else '[Section file not found]'}
-
-### Section 2.3: Analysis & Results
-{folders['drafts'] / '02_3_analysis_results.md' if (folders['drafts'] / '02_3_analysis_results.md').exists() else '[Section file not found]'}
-
-### Section 2.4: Discussion
-{folders['drafts'] / '02_4_discussion.md' if (folders['drafts'] / '02_4_discussion.md').exists() else '[Section file not found]'}
-
-## Chapter 3: Conclusion
-{conclusion_output}
-
-## Chapter 4: Appendices
-{appendix_output}
-"""
-
-        # Read section files for complete content
-        try:
-            lit_review_content = (folders['drafts'] / '02_1_literature_review.md').read_text(encoding='utf-8') if (folders['drafts'] / '02_1_literature_review.md').exists() else ""
-            methodology_content = (folders['drafts'] / '02_2_methodology.md').read_text(encoding='utf-8') if (folders['drafts'] / '02_2_methodology.md').exists() else ""
-            results_content = (folders['drafts'] / '02_3_analysis_results.md').read_text(encoding='utf-8') if (folders['drafts'] / '02_3_analysis_results.md').exists() else ""
-            discussion_content = (folders['drafts'] / '02_4_discussion.md').read_text(encoding='utf-8') if (folders['drafts'] / '02_4_discussion.md').exists() else ""
-
-            # Truncate sections to fit within context (keep first/last portions)
-            all_chapters_for_qa = f"""# Complete Draft for QA Review
-
-Topic: {topic}
-
-## Chapter 1: Introduction (First 1500 chars)
-{intro_output[:1500]}
-
-## Chapter 2: Main Body
-
-### Section 2.1: Literature Review (First 1000 + Last 1000 chars)
-{lit_review_content[:1000]}
-[... middle content truncated ...]
-{lit_review_content[-1000:] if len(lit_review_content) > 1000 else ''}
-
-### Section 2.2: Methodology (First 1000 + Last 1000 chars)
-{methodology_content[:1000]}
-[... middle content truncated ...]
-{methodology_content[-1000:] if len(methodology_content) > 1000 else ''}
-
-### Section 2.3: Analysis & Results (First 1000 + Last 1000 chars)
-{results_content[:1000]}
-[... middle content truncated ...]
-{results_content[-1000:] if len(results_content) > 1000 else ''}
-
-### Section 2.4: Discussion (First 1000 + Last 1000 chars)
-{discussion_content[:1000]}
-[... middle content truncated ...]
-{discussion_content[-1000:] if len(discussion_content) > 1000 else ''}
-
-## Chapter 3: Conclusion (First 1500 chars)
-{conclusion_output[:1500]}
-
-## Chapter 4: Appendices (First 1000 chars)
-{appendix_output[:1000]}
-"""
-        except Exception as e:
-            logger.warning(f"Could not read section files for QA: {e}")
-            all_chapters_for_qa = f"""# Complete Draft for QA Review (Truncated)
-
-Topic: {topic}
-
-Introduction: {intro_output[:1500]}
-Main Body: {body_output[:2000]}
-Conclusion: {conclusion_output[:1500]}
-Appendices: {appendix_output[:1000]}
-"""
+        # Prepare all chapter content for QA review (dynamic)
+        all_chapters_for_qa = f"# Complete Draft for QA Review\n\nTopic: {topic}\n\n"
+        for ch in outline_chapters:
+            ch_text = chapter_outputs.get(ch['index'], '')
+            # Truncate each chapter to first+last 1000 chars for QA context
+            if len(ch_text) > 2500:
+                ch_text = ch_text[:1200] + "\n[... truncated ...]\n" + ch_text[-1200:]
+            all_chapters_for_qa += f"## Chapter {ch['index']}: {ch['title']}\n{ch_text}\n\n"
 
         # === QA STEP 1: Thread Agent - Narrative Consistency ===
         try:
@@ -1809,19 +1326,15 @@ Appendices: {appendix_output[:1000]}
 {all_chapters_for_qa}
 
 **Check for:**
-1. Contradictions across sections
-2. Fulfilled promises (Introduction → Conclusion)
-3. Proper cross-references
-4. Consistent terminology
-5. Logical flow between sections
-
-**Focus on Main Body sections 2.1-2.4:**
-- Do they reference each other properly?
-- Is there narrative continuity?
-- Are research gaps from 2.1 addressed in 2.4?""",
+1. Contradictions across chapters
+2. Fulfilled promises (early chapters → later chapters)
+3. Proper cross-references between chapters
+4. Consistent terminology throughout
+5. Logical flow between all chapters""",
                 save_to=folders['drafts'] / "qa_narrative_consistency.md",
                 skip_validation=True,
-                verbose=verbose
+                verbose=verbose,
+                clean_thinking=False
             )
 
             thread_time = time.time() - qa_start
@@ -1860,7 +1373,8 @@ Appendices: {appendix_output[:1000]}
 **Citation style:** {citation_database.citation_style}""",
                 save_to=folders['drafts'] / "qa_voice_unification.md",
                 skip_validation=True,
-                verbose=verbose
+                verbose=verbose,
+                clean_thinking=False
             )
 
             narrator_time = time.time() - qa_start
@@ -1896,38 +1410,16 @@ Appendices: {appendix_output[:1000]}
             tracker.update_phase("compiling", progress_percent=75, details={"stage": "assembling_draft"})
             tracker.check_cancellation()  # Check before starting major phase
 
-        # Strip headers from section outputs (they already contain # headers from agents)
-        def strip_first_header(text: str) -> str:
-            """Remove first line if it's a markdown header."""
-            lines = text.strip().split('\n')
-            if lines and lines[0].startswith('#'):
-                return '\n'.join(lines[1:]).strip()
-            return text.strip()
-
-        intro_clean = strip_first_header(intro_output)
-        body_clean = strip_first_header(body_output)
-        conclusion_clean = strip_first_header(conclusion_output)
-        # Read appendices from file (handles both generated and skipped cases)
-        appendices_file = folders['drafts'] / "04_appendices.md"
-        if appendices_file.exists():
-            appendix_content = appendices_file.read_text(encoding='utf-8')
-            appendix_clean = strip_first_header(appendix_content)
-        else:
-            appendix_clean = ""
-
         # Generate current date for cover page
         from datetime import datetime
         current_date = datetime.now().strftime("%B %Y")
 
-        # Combine all sections with YAML frontmatter for cover page
-        # Calculate word count for cover page
-        draft_text = f"{intro_clean}\n{body_clean}\n{conclusion_clean}\n{appendix_clean}"
-        word_count = len(draft_text.split())
-
-        # Calculate pages estimate (250 words per page)
+        # Calculate word count from all chapters
+        all_chapter_text = "\n".join(chapter_outputs[k] for k in sorted(chapter_outputs.keys()))
+        word_count = len(all_chapter_text.split())
         pages_estimate = word_count // 250
 
-        # Determine draft type label based on academic level
+        # Determine labels
         draft_type_labels = {
             'research_paper': 'Research Paper',
             'bachelor': 'Bachelor Draft',
@@ -1935,8 +1427,6 @@ Appendices: {appendix_output[:1000]}
             'phd': 'PhD Dissertation'
         }
         draft_type = draft_type_labels.get(academic_level, 'Master Draft')
-    
-        # Determine degree label
         degree_labels = {
             'research_paper': 'Research Paper',
             'bachelor': 'Bachelor of Science',
@@ -1945,8 +1435,6 @@ Appendices: {appendix_output[:1000]}
         }
         degree = degree_labels.get(academic_level, 'Master of Science')
 
-        # Build YAML with proper academic metadata
-        # Use provided values or sensible defaults
         yaml_author = author_name or ""
         yaml_institution = institution or ""
         yaml_department = department or ""
@@ -1956,6 +1444,7 @@ Appendices: {appendix_output[:1000]}
         yaml_location = location or ""
         yaml_student_id = student_id or ""
 
+        # Build YAML frontmatter
         full_draft = f"""---
 title: "{topic}"
 author: "{yaml_author}"
@@ -1973,34 +1462,34 @@ word_count: "{word_count:,} words"
 pages: "{pages_estimate}"
 ---
 
-## Abstract
+## {"摘要" if language == 'zh' else "Abstract"}
 [Abstract will be generated]
 
 \\newpage
 
-# 1. Introduction
-{intro_clean}
-
-\\newpage
-
-# 2. Main Body
-{body_clean}
-
-\\newpage
-
-# 3. Conclusion
-{conclusion_clean}
-
-\\newpage
-
-# 4. Appendices
-{appendix_clean}
-
-\\newpage
-
-# 5. References
-[Citations will be compiled]
 """
+
+        # Generate Table of Contents
+        toc_label = "目录" if language == 'zh' else "Table of Contents"
+        full_draft += f"# {toc_label}\n\n"
+        for ch in outline_chapters:
+            if language == 'zh':
+                full_draft += f"- **第{ch['index']}章** {ch['title']}\n"
+            else:
+                full_draft += f"- **Chapter {ch['index']}:** {ch['title']}\n"
+        full_draft += "\n\\newpage\n\n"
+
+        # Assemble all chapters dynamically
+        for ch in outline_chapters:
+            ch_text = chapter_outputs.get(ch['index'], '')
+            if language == 'zh':
+                full_draft += f"# 第{ch['index']}章 {ch['title']}\n\n{ch_text}\n\n\\newpage\n\n"
+            else:
+                full_draft += f"# Chapter {ch['index']}: {ch['title']}\n\n{ch_text}\n\n\\newpage\n\n"
+
+        # References placeholder
+        ref_label = "参考文献" if language == 'zh' else "References"
+        full_draft += f"# {ref_label}\n[Citations will be compiled]\n"
 
         # Citation Compiler - Replace {cite_XXX} with formatted citations
         if tracker:
@@ -2038,6 +1527,42 @@ pages: "{pages_estimate}"
             output_dir=folders['exports'],
             verbose=verbose
         )
+
+        # For Chinese papers, also generate an English abstract
+        if language == 'zh' and abstract_success and abstract_updated_content:
+            if tracker:
+                tracker.log_activity("📝 Generating English abstract...", event_type="info", phase="compiling")
+            try:
+                # Extract Chinese abstract from the updated content
+                zh_abstract_match = re.search(r'## (?:Abstract|摘要)\s*\n(.*?)(?=\n#|\n\\newpage|\Z)', abstract_updated_content, re.DOTALL)
+                zh_abstract_text = zh_abstract_match.group(1).strip() if zh_abstract_match else ""
+                if zh_abstract_text and '[Abstract will be generated]' not in zh_abstract_text:
+                    en_abstract = run_agent(
+                        model=model,
+                        name="English Abstract Generator",
+                        prompt_path="prompts/06_enhance/abstract_generator.md",
+                        user_input=f"""Translate and adapt the following Chinese academic abstract into English.
+Keep the same structure and academic tone. Output ONLY the English abstract text.
+
+Chinese abstract:
+{zh_abstract_text}""",
+                        save_to=folders['exports'] / "abstract_english.md",
+                        clean_thinking=True
+                    )
+                    # Insert English abstract after Chinese abstract
+                    insert_point = abstract_updated_content.find('\\newpage', abstract_updated_content.find('## Abstract') if '## Abstract' in abstract_updated_content else abstract_updated_content.find('## 摘要'))
+                    if insert_point == -1:
+                        insert_point = abstract_updated_content.find('\n# ', abstract_updated_content.find('## '))
+                    if insert_point > 0:
+                        abstract_updated_content = (
+                            abstract_updated_content[:insert_point] +
+                            f"\n\n## Abstract (English)\n\n{en_abstract}\n\n" +
+                            abstract_updated_content[insert_point:]
+                        )
+                    logger.info("English abstract generated for Chinese paper")
+            except Exception as e:
+                logger.warning(f"English abstract generation failed: {e}, continuing with Chinese only")
+
         if tracker:
             tracker.log_activity("✅ Abstract generated", event_type="found", phase="compiling")
 
@@ -2045,7 +1570,6 @@ pages: "{pages_estimate}"
         if abstract_success and abstract_updated_content:
             final_draft = abstract_updated_content
         else:
-            # Fallback: use compiled draft without abstract
             final_draft = compiled_draft
 
         # Generate professional filename from topic

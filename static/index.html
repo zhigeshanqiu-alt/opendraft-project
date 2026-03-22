@@ -108,10 +108,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI'
 #activity-container { flex:1; overflow-y:auto; padding:0.5rem 0.75rem; }
 
 /* Completed sections panel */
-#sections-panel { display:none; padding:0.6rem 0.75rem; border-bottom:1px solid var(--panel-border); flex-shrink:0; }
+#sections-panel { display:none; padding:0.6rem 0.75rem; border-bottom:1px solid var(--panel-border); flex-shrink:0; position:relative; }
 #sections-panel.visible { display:block; }
 .sections-label { font-size:0.7rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-dim); font-weight:600; margin-bottom:0.45rem; }
 .sections-grid { display:flex; flex-wrap:wrap; gap:0.4rem; }
+.sections-grid.collapsed { display:none; }
+.sections-toggle { display:flex; justify-content:center; padding:0.15rem 0 0.05rem; opacity:0; transition:opacity 0.2s; }
+#sections-panel:hover .sections-toggle { opacity:1; }
+.sections-toggle-btn { background:none; border:none; cursor:pointer; color:var(--text-dim); font-size:0.55rem; padding:0.15rem 1.2rem; border-radius:4px; transition:background 0.15s,color 0.15s; line-height:1; }
+.sections-toggle-btn:hover { background:var(--bg-input); color:var(--accent); }
 .section-card { display:flex; align-items:center; gap:0.4rem; padding:0.4rem 0.7rem; background:var(--bg-card); border:1px solid var(--border); border-radius:8px; cursor:pointer; font-size:0.78rem; font-weight:500; color:var(--text); transition:all 0.2s; box-shadow:var(--shadow); white-space:nowrap; }
 .section-card:hover { border-color:var(--accent); color:var(--accent); box-shadow:0 2px 8px var(--accent-glow); transform:translateY(-1px); }
 .section-card.active { border-color:var(--accent); background:var(--accent-glow); color:var(--accent); }
@@ -151,6 +156,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI'
 .activity-bullet { width:6px; height:6px; border-radius:50%; background:var(--border); flex-shrink:0; margin-top:0.45rem; }
 .activity-bullet.highlight { background:var(--accent); }
 .activity-bullet.found { background:var(--green); }
+.activity-bullet.refining { background:var(--yellow); animation: pulse-refine 1.2s ease-in-out infinite; }
+.activity-bullet.refined { background:var(--yellow); }
+@keyframes pulse-refine { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
 .activity-text { flex:1; min-width:0; word-break:break-word; }
 .activity-time { font-size:0.7rem; color:var(--text-dim); flex-shrink:0; }
 .phase-spinner { width:18px; height:18px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin 0.8s linear infinite; flex-shrink:0; margin-left:auto; }
@@ -190,12 +198,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI'
 #editor-area { flex:1; overflow:hidden; display:none; }
 #editor-area textarea { width:100%; height:100%; background:var(--panel-bg); color:var(--text); border:none; outline:none; padding:2rem 2.5rem; font-family:'SF Mono','Menlo',monospace; font-size:0.88rem; line-height:1.7; resize:none; }
 
-/* Approval banner */
-.approval-bar { display:none; padding:0.75rem 1.25rem; background:linear-gradient(135deg,#ede9fe,#dbeafe); border-top:1px solid var(--border); gap:0.75rem; align-items:center; flex-shrink:0; }
-.approval-bar.show { display:flex; }
-.approval-bar .info { flex:1; font-size:0.85rem; color:var(--text); }
-.approval-bar .info strong { color:var(--accent); }
-.btn-approve { background:var(--accent); color:#fff; border:none; padding:0.45rem 1.2rem; border-radius:8px; font-size:0.85rem; font-weight:600; cursor:pointer; }
+/* Approval floating card */
+.approval-card { display:none; margin:0.5rem 0; padding:0.65rem 0.75rem; background:linear-gradient(135deg,#ede9fe,#dbeafe); border:1px solid rgba(99,102,241,0.25); border-radius:10px; gap:0.5rem; flex-direction:column; box-shadow:0 2px 12px rgba(99,102,241,0.12); animation:approval-in 0.3s ease; }
+.approval-card.show { display:flex; }
+@keyframes approval-in { from{opacity:0;transform:translateY(-6px);} to{opacity:1;transform:translateY(0);} }
+.approval-card .info { font-size:0.82rem; color:var(--text); }
+.approval-card .info strong { color:var(--accent); }
+.btn-approve { background:var(--accent); color:#fff; border:none; padding:0.4rem 1rem; border-radius:8px; font-size:0.82rem; font-weight:600; cursor:pointer; align-self:flex-end; }
 .btn-approve:hover { background:var(--accent-hover); }
 
 /* Download bar */
@@ -267,6 +276,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI'
       <div id="sections-panel">
         <div class="sections-label" data-i18n="sections_label">已完成章节</div>
         <div class="sections-grid" id="sections-grid"></div>
+        <div class="sections-toggle"><button class="sections-toggle-btn" id="sections-toggle-btn" onclick="toggleSectionsPanel()">▲</button></div>
       </div>
       <div id="activity-container"></div>
       <!-- Settings form (shown first, replaced by activity after confirm) -->
@@ -313,11 +323,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI'
       </div>
       <div id="preview-area"><div class="placeholder"><div class="placeholder-icon">&#9997;</div><div data-i18n="placeholder_wait">请先完成左侧论文设置...</div></div></div>
       <div id="editor-area"><textarea id="md-editor" spellcheck="false"></textarea></div>
-      <!-- Approval bar -->
-      <div class="approval-bar" id="approval-bar">
-        <div class="info" id="approval-info"></div>
-        <button class="btn-approve" id="btn-approve" onclick="approveAndContinue()" data-i18n="btn_approve">确认并继续</button>
-      </div>
       <!-- Download bar -->
       <div class="download-bar" id="download-bar">
         <span data-i18n="dl_success">论文生成成功！</span>
@@ -783,10 +788,7 @@ function showOutlineReview(outline) {
   renderPreview(outline);
   switchRightTab('editor');
   document.getElementById('btn-save').disabled = false;
-  const bar = document.getElementById('approval-bar');
-  bar.classList.add('show');
-  document.getElementById('approval-info').innerHTML = `<strong>${t('outline_review_msg')}</strong>`;
-  document.getElementById('btn-approve').textContent = t('approve_outline');
+  showApprovalCard(`<strong>${t('outline_review_msg')}</strong>`, t('approve_outline'));
   document.getElementById('ws-dot').className = 'status-dot paused';
   document.getElementById('ws-status-text').textContent = t('status_review');
 }
@@ -824,10 +826,25 @@ function removeAiThinking() {
   if (el) el.remove();
 }
 
+// ===== APPROVAL CARD (floating in activity log) =====
+function showApprovalCard(infoHtml, btnText) {
+  hideApprovalCard();
+  const container = document.getElementById('activity-container');
+  const card = document.createElement('div');
+  card.className = 'approval-card show';
+  card.id = 'approval-card';
+  card.innerHTML = `<div class="info">${infoHtml}</div><button class="btn-approve" onclick="approveAndContinue()">${btnText}</button>`;
+  container.appendChild(card);
+  container.scrollTop = container.scrollHeight;
+}
+function hideApprovalCard() {
+  const el = document.getElementById('approval-card');
+  if (el) el.remove();
+}
+
 // ===== STEP 3: APPROVE & START WRITING =====
 async function approveAndContinue() {
-  const bar = document.getElementById('approval-bar');
-  bar.classList.remove('show');
+  hideApprovalCard();
   document.getElementById('ws-dot').className = 'status-dot';
   document.getElementById('ws-status-text').textContent = t('status_processing');
 
@@ -867,7 +884,7 @@ function showWorkspace(topic, skipSettings) {
   document.getElementById('activity-container').innerHTML = '';
   document.getElementById('activity-container').style.display = skipSettings ? 'block' : 'none';
   document.getElementById('download-bar').classList.remove('show');
-  document.getElementById('approval-bar').classList.remove('show');
+  hideApprovalCard();
   document.getElementById('btn-save').disabled = true;
   document.getElementById('btn-print').disabled = true;
   document.getElementById('ws-dot').className = 'status-dot';
@@ -968,6 +985,8 @@ function addActivity(msg) {
   const item=document.createElement('div'); item.className='activity-item';
   const now=new Date(); const ts=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0')+':'+now.getSeconds().toString().padStart(2,'0');
   const isC=isMilestone(msg), isF=msg.includes('Found:')||msg.includes('发现');
+  const isRefining=msg.includes('🔄')||msg.includes('正在润色');
+  const isRefined=msg.includes('✨')||msg.includes('润色完成');
   let translated=translateMsg(msg);
 
   // Parse source link from ||url|| marker
@@ -986,21 +1005,13 @@ function addActivity(msg) {
     textHtml = `<a class="source-link" href="${linkUrl}" target="_blank" rel="noopener">${translated}</a>`;
   }
 
-  item.innerHTML=`<div class="activity-bullet ${isC?'highlight':isF?'found':''}"></div><div class="activity-text"${textId} data-raw="${msg.replace(/"/g,'&quot;')}">${textHtml}</div><div class="activity-time">${ts}</div>`;
+  const bulletClass=isC?'highlight':isRefining?'refining':isRefined?'refined':isF?'found':'';
+  item.innerHTML=`<div class="activity-bullet ${bulletClass}"></div><div class="activity-text"${textId} data-raw="${msg.replace(/"/g,'&quot;')}">${textHtml}</div><div class="activity-time">${ts}</div>`;
 
-  // Add section card when a milestone completes
+  // Add section card only for outline milestone (chapter cards are added by chapter_review SSE)
   if (isC && currentJobId) {
-    const sectionMap = [
-      {keys:['Outline created','Outline ready','大纲创建','大纲已准备'], section:'outline'},
-      {keys:['Introduction complete','引言完成'], section:'introduction'},
-      {keys:['Literature Review complete','文献综述完成'], section:'literature_review'},
-      {keys:['Methodology complete','研究方法完成'], section:'methodology'},
-      {keys:['Analysis & Results complete','Analysis complete','分析与结果完成','分析完成'], section:'analysis_results'},
-      {keys:['Discussion complete','讨论完成','讨论部分完成'], section:'discussion'},
-      {keys:['Conclusion complete','结论完成'], section:'conclusion'},
-    ];
-    for (const sm of sectionMap) {
-      if (sm.keys.some(k => msg.includes(k))) { addSectionCard(sm.section); break; }
+    if (msg.includes('Outline created') || msg.includes('大纲创建') || msg.includes('Outline ready') || msg.includes('大纲已准备')) {
+      addSectionCard('outline', currentLang === 'zh' ? '大纲' : 'Outline');
     }
   }
 
@@ -1117,7 +1128,7 @@ let currentSectionName = '';
 let completedSections = {};
 const SECTION_ICONS = { outline:'📋', introduction:'📝', literature_review:'📚', methodology:'🔬', analysis_results:'📊', discussion:'💬', conclusion:'📌', main_body:'📄', appendices:'📎' };
 
-function addSectionCard(sectionKey) {
+function addSectionCard(sectionKey, displayName) {
   if (completedSections[sectionKey]) return; // already added
   completedSections[sectionKey] = true;
   const panel = document.getElementById('sections-panel');
@@ -1126,14 +1137,23 @@ function addSectionCard(sectionKey) {
   const card = document.createElement('div');
   card.className = 'section-card';
   card.setAttribute('data-section', sectionKey);
-  card.innerHTML = `<span class="sc-icon">${SECTION_ICONS[sectionKey]||'📄'}</span><span>${t('sec_'+sectionKey)||sectionKey}</span><span class="sc-dot"></span>`;
+  // Use displayName if provided, else try translation, else use key
+  const label = displayName || t('sec_'+sectionKey) || sectionKey;
+  const icon = sectionKey === 'outline' ? '📋' : '📄';
+  card.innerHTML = `<span class="sc-icon">${icon}</span><span>${label}</span><span class="sc-dot"></span>`;
   card.onclick = () => {
-    // Highlight active card
     grid.querySelectorAll('.section-card').forEach(c => c.classList.remove('active'));
     card.classList.add('active');
     loadSection(sectionKey);
   };
   grid.appendChild(card);
+}
+
+function toggleSectionsPanel() {
+  const grid = document.getElementById('sections-grid');
+  const btn = document.getElementById('sections-toggle-btn');
+  grid.classList.toggle('collapsed');
+  btn.textContent = grid.classList.contains('collapsed') ? '▼' : '▲';
 }
 
 async function loadSection(sectionName) {
@@ -1170,21 +1190,20 @@ function connectSSE() {
       renderPreview(data.outline);
       switchRightTab('editor');
       document.getElementById('btn-save').disabled=false;
-      const bar=document.getElementById('approval-bar'); bar.classList.add('show');
-      document.getElementById('approval-info').innerHTML=`<strong>${t('outline_review_msg')}</strong>`;
-      document.getElementById('btn-approve').textContent=t('approve_outline');
+      showApprovalCard(`<strong>${t('outline_review_msg')}</strong>`, t('approve_outline'));
       document.getElementById('ws-dot').className='status-dot paused';
       document.getElementById('ws-status-text').textContent=t('status_review');
     }
     if(data.type==='chapter_review') {
       reviewMode='chapter';
-      currentSectionName=data.chapter||'chapter';
+      const sKey = data.chapter||'chapter';
+      currentSectionName=sKey;
+      const chapterDisplayName = data.chapter_name || data.chapter || sKey;
+      addSectionCard(sKey, chapterDisplayName);
       if(data.content){document.getElementById('md-editor').value=data.content;renderPreview(data.content);}
       switchRightTab('preview');
       document.getElementById('btn-save').disabled=false;
-      const bar=document.getElementById('approval-bar'); bar.classList.add('show');
-      document.getElementById('approval-info').innerHTML=`<strong>${t('chapter_review_msg')} ${data.chapter}</strong>`;
-      document.getElementById('btn-approve').textContent=t('approve_chapter');
+      showApprovalCard(`<strong>${t('chapter_review_msg')} ${chapterDisplayName}</strong>`, t('approve_chapter'));
       document.getElementById('ws-dot').className='status-dot paused';
       document.getElementById('ws-status-text').textContent=t('status_review');
     }
